@@ -1,0 +1,22 @@
+# ARBITER-X experiment definition — fee counterfactual (docs/COUNTERFACTUALS.md)
+# Does a 2-tick-per-lot fee flip the wide-quoting MM's profitability?
+[experiment]
+name = fee_grid
+seed = 2026
+horizon_ms = 40
+
+[baseline]
+algo_latency_ns = 800
+
+[variant.no_fees]
+fee_per_lot = 0
+
+[variant.fee_1]
+fee_per_lot = 1
+
+[variant.fee_3]
+fee_per_lot = 3
+
+[variant.fee_3_wide]
+fee_per_lot = 3
+mm.half_spread_ticks = 4

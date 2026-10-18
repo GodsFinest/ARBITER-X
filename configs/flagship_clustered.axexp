@@ -1,0 +1,26 @@
+# Flagship research experiment: fixed-total latency ALLOCATION.
+# The question: at a FIXED total budget, does the PLACEMENT of latency
+# across the trader's pipeline stages change execution economics?
+# See docs/COUNTERFACTUALS.md + include/arbiter/latency.hpp (stage
+# semantics). Run: arbiter flagship --config configs/flagship_clustered.axexp
+[experiment]
+name = flagship_clustered
+seeds = 2026,2027,2028,2029,2030,2031,2032,2033
+horizon_ns = 100000000
+warmup_ns = 2000000
+[latency]
+total_ns = 8000
+# allocation grid: md-share slice of the simplex (decision/order split the
+# remainder); every cell has the SAME total (exact invariant)
+md_shares = 0,0.125,0.25,0.375,0.5,0.625,0.75,0.875,1
+[market]
+# clustered = self-exciting taker flow (the proposed mechanism);
+# poisson = memoryless placebo (falsification arm — run it too)
+flow_model = clustered
+taker_self_excitation = 0.9
+# bots_observe_shadow: false = reactive world (flagship default),
+# true = frozen observation channel (interference sensitivity probe)
+bots_observe_shadow = false
+[stats]
+economic_threshold_per_lot = 1.0
+permutation_reps = 5000

@@ -1,0 +1,17 @@
+build/
+build-*/
+.runtime/
+.cache/
+__pycache__/
+*.py[cod]
+artifacts/
+*.o
+*.a
+*.d
+.DS_Store
+/data/*.journal
+/data/*.snapshot
+*.zip
+*.tar
+*.tar.gz
+*.tgz

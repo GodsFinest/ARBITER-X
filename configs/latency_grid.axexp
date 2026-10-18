@@ -1,0 +1,22 @@
+# ARBITER-X experiment definition — latency grid equivalent of the classic
+# built-in grid, as a file (docs/COUNTERFACTUALS.md grammar). Compare with
+# `arbiter experiment --seed 2026 --ms 40`.
+[experiment]
+name = latency_grid
+seed = 2026
+horizon_ms = 40
+
+[baseline]
+algo_latency_ns = 800
+
+[variant.fast_300ns]
+algo_latency_ns = 300
+
+[variant.slow_3000ns]
+algo_latency_ns = 3000
+
+[variant.jittery_md]
+md_channel.jitter_ns = 1500
+
+[variant.lossy_md_1pct]
+md_channel.loss_rate = 0.01

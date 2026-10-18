@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-13
+            os: ubuntu-latest
+            cc: gcc-13
+            cxx: g++-13
+            install: g++-13
+          - name: clang-18
+            os: ubuntu-latest
+            cc: clang-18
+            cxx: clang++-18
+            install: clang-18
+          - name: apple-clang
+            os: macos-latest
+            cc: clang
+            cxx: clang++
+            install: ""
+    name: build-and-test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler
+        if: matrix.install != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.install }}
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DARBITER_WARNINGS_AS_ERRORS=ON
+      - name: Build
+        run: cmake --build build --parallel 2
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Script checks
+        run: |
+          sh -n scripts/reproduce_all.sh examples/flagship.sh
+          python3 -m py_compile tools/research/*.py
+      - name: Complete reproduction workflow
+        if: matrix.name == 'gcc-13'
+        env:
+          ARBITER_BUILD_DIR: build-repro
+          CMAKE_BUILD_PARALLEL_LEVEL: 2
+        run: ./scripts/reproduce_all.sh
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang-18
+      CXX: clang++-18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler
+        run: sudo apt-get update && sudo apt-get install -y clang-18
+      - name: Configure
+        run: >-
+          cmake -S . -B build-sanitize
+          -DCMAKE_BUILD_TYPE=Debug
+          -DARBITER_WARNINGS_AS_ERRORS=ON
+          -DARBITER_ENABLE_SANITIZERS=ON
+      - name: Build
+        run: cmake --build build-sanitize --parallel 2
+      - name: Test
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: ctest --test-dir build-sanitize --output-on-failure
