@@ -34,7 +34,7 @@ jobs:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install compiler
         if: matrix.install != ''
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.install }}
@@ -52,7 +52,7 @@ jobs:
           sh -n scripts/reproduce_all.sh examples/flagship.sh
           python3 -m py_compile tools/research/*.py
       - name: Complete reproduction workflow
-        if: matrix.name == 'gcc-13'
+        if: matrix.name == 'apple-clang'
         env:
           ARBITER_BUILD_DIR: build-repro
           CMAKE_BUILD_PARALLEL_LEVEL: 2
@@ -64,7 +64,7 @@ jobs:
       CC: clang-18
       CXX: clang++-18
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install compiler
         run: sudo apt-get update && sudo apt-get install -y clang-18
       - name: Configure
