@@ -1,6 +1,6 @@
 # ARBITER-X
 
-[![CI](https://github.com/s21aarav/ARBITER-X/actions/workflows/ci.yml/badge.svg)](https://github.com/s21aarav/ARBITER-X/actions/workflows/ci.yml)
+[![CI](https://github.com/GodsFinest/ARBITER-X/actions/workflows/ci.yml/badge.svg)](https://github.com/GodsFinest/ARBITER-X/actions/workflows/ci.yml)
 
 ARBITER-X is a deterministic C++23 laboratory for market-microstructure and
 execution research. It combines a price-time-priority matching engine, a
