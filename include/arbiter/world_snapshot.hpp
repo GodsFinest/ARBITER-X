@@ -167,7 +167,9 @@ struct SnapRiskAccount {  // per-account RiskState (per-account isolation)
     std::vector<i64> window;
 };
 
-inline constexpr u32 kWorldSnapshotVersion = 14;
+inline constexpr u32 kWorldSnapshotVersion = 15;
+// v15: authoritative cash includes fees; MD duplicate counts are receiver suppressions.
+// Format 14 requires the archived original implementation; no implicit conversion.
 // v12: MD packet attempts (anti-alias), order/exec transport sequences +
 // receiver dedupe state, risk working-order reservations, authoritative
 // economics ledger, per-channel fault counters, open fill-report table.

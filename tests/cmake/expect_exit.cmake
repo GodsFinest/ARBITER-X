@@ -1,0 +1,7 @@
+execute_process(COMMAND "${PROGRAM}" ${ARGS} RESULT_VARIABLE actual OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(NOT actual STREQUAL "${EXPECTED}")
+  message(FATAL_ERROR "Expected exit ${EXPECTED}, got ${actual}: ${output}${error}")
+endif()
+if(DEFINED MESSAGE_PATTERN AND NOT "${output}${error}" MATCHES "${MESSAGE_PATTERN}")
+  message(FATAL_ERROR "Missing expected diagnostic ${MESSAGE_PATTERN}: ${output}${error}")
+endif()

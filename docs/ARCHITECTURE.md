@@ -10,7 +10,7 @@ counterfactuals directly comparable.
 ```text
 CLI / benchmarks
         |
-experiments / research pipeline
+fixed-total flagship / diagnostics
         |
 world, replay, snapshots, strategies, risk, simulation
         |
@@ -19,7 +19,7 @@ wire protocol, journal, order books
 deterministic types, configuration, RNG, hashing, CRC
 ```
 
-The `arbiter_core` static library contains every engine and research module.
+The `arbiter_core` static library contains the execution engine, recovery, verification and fixed-total flagship.
 The `arbiter` CLI and `arbiter_bench` executable are thin consumers of that
 library. Tests link the same library used by the executables.
 
@@ -33,8 +33,8 @@ library. Tests link the same library used by the executables.
 | `strategy` | market maker, momentum taker, local view, queue inference |
 | `risk` | per-account bounds, position, notional, rate, and duplicate checks |
 | `exec` | scheduler, gateway, matching, feed handling, replay, snapshots |
-| `counterfactual` | experiment grids, latency allocation, paired inference |
-| `data`, `research` | normalized L2 input, features, labels, models, execution economics |
+| `counterfactual` | fixed-total latency allocation and paired inference |
+| `analysis` | shared statistical calculations |
 | `verification` | differential generation, diagnosis, and minimization |
 
 ## Event machine
@@ -84,11 +84,22 @@ identify the first causal event.
 ## Deliberate boundaries
 
 - No sockets, venue adapters, kernel bypass, or real order routing.
-- The deterministic engine is single-threaded; the SPSC ring is a standalone
-  concurrency benchmark, not part of execution.
+- The engine is single-threaded. The unrelated SPSC experiment was retired
+  and remains recoverable at archive/monolith-65b9fa7.
 - Bot flow is co-located with the simulated exchange and does not pass through
   the strategy-facing risk/network path.
 - Cross-compiler and cross-architecture bitwise identity is not claimed.
 
 See [the determinism contract](DETERMINISM.md), [execution model](EXECUTION_MODEL.md),
 and [limitations](LIMITATIONS.md) for the exact guarantees.
+
+## Extension boundary and reading order
+
+ArbiterX::core is the versioned CMake library. LAB uses World/WorldConfig,
+canonical ladders, RunStats, Config, RNG/hash/status and statistics through
+installed public headers. No private implementation or callback interface is
+required. LAB owns historical modeling and general grids; core never loads it.
+
+For learning: start with order/types and both books, then world_config.cpp,
+world.cpp (execution), world_state.cpp (hash/capture/restore), the snapshot
+codec, and finally flagship.cpp. Their tests demonstrate each boundary.

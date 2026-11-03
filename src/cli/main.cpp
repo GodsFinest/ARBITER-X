@@ -1,8 +1,10 @@
 // Command-line entry points over the shared deterministic engine.
 
 #include "arbiter/book_common.hpp"
+#include "arbiter/config.hpp"
+#include "arbiter/build_info.hpp"
 #include "arbiter/opt_book.hpp"
-#include "arbiter/experiment.hpp"
+#include "arbiter/world_overrides.hpp"
 #include "arbiter/flagship.hpp"
 #include "arbiter/differential.hpp"
 #include "arbiter/journal.hpp"
@@ -32,7 +34,6 @@
 
 using namespace arbiter;
 
-int cmd_research(int argc, char** argv);
 
 namespace {
 
@@ -250,33 +251,6 @@ int cmd_journal(int argc, char** argv) {
     return 2;
 }
 
-int cmd_timetravel(int argc, char** argv) {
-    const char* path = nullptr;
-    u64 target = 0;
-    for (int i = 1; i < argc; ++i) {
-        if (!std::strcmp(argv[i], "--journal") && i + 1 < argc) path = argv[++i];
-        else if (!std::strcmp(argv[i], "--event")) {
-            if (!parse_u64_option(argc, argv, i, target)) return 2;
-        }
-    }
-    if (!path || !target) {
-        std::printf("usage: arbiter timetravel --journal FILE --event N\n");
-        return 2;
-    }
-    // full replay to N is the reference; snapshot+tail (when checkpoints exist)
-    // must agree, this command demonstrates both.
-    ReplayResult full = replay_journal(path, BookImpl::Optimized, target, nullptr);
-    std::printf("time travel to event %llu of %s\n", (unsigned long long)target, path);
-    std::printf("  status          : %s\n", to_cstr(full.status.code));
-    std::printf("  book state hash : %llu\n", (unsigned long long)full.state_hash);
-    std::printf("  inputs applied  : %llu (fills: %llu)\n", (unsigned long long)full.events_applied,
-                (unsigned long long)full.fills_recomputed);
-    return full.status ? 0 : 1;
-}
-
-// World-level time travel: capture a FULL world checkpoint mid-run (the
-// entire scheduler/strategy/network state), then continue it, or fork it by
-// changing exactly one configuration variable (strict_config=false path).
 int cmd_worldcheck(int argc, char** argv) {
     u64 seed = 42, events = 20000;
     const char* out = "artifacts/world_checkpoint.wsnap";
@@ -333,6 +307,8 @@ int cmd_worldjump(int argc, char** argv) {
     }
     auto snap = read_world_snapshot(path);
     if (!snap) {
+        if (snap.status.code == Errc::Unsupported)
+            std::fputs("Unsupported world snapshot format. Format 14 requires archive/monolith-65b9fa7; regenerate snapshots with format 15.\n", stderr);
         std::printf("snapshot read failed: %s (ctx %llu)\n", to_cstr(snap.status.code),
                     (unsigned long long)snap.status.context);
         return 1;
@@ -389,6 +365,8 @@ int cmd_worldfork(int argc, char** argv) {
     }
     auto snap = read_world_snapshot(path);
     if (!snap) {
+        if (snap.status.code == Errc::Unsupported)
+            std::fputs("Unsupported world snapshot format. Format 14 requires archive/monolith-65b9fa7; regenerate snapshots with format 15.\n", stderr);
         std::printf("snapshot read failed: %s\n", to_cstr(snap.status.code));
         return 1;
     }
@@ -427,7 +405,7 @@ int cmd_worldfork(int argc, char** argv) {
     else if (key == "md_loss") full_key = "md_channel.loss_rate";
     // reuse the experiment variable table (single source of truth)
     std::string err;
-    if (!Experiment::apply_key_pub(cfg, full_key, val, err)) {
+    if (!apply_world_override(cfg, full_key, val, err)) {
         std::printf("unknown variable: %s (supported: any experiment override, e.g.\n"
                     "  half_spread | algo_latency | md_loss | fee_per_lot | md_channel.jitter_ns ...)\n"
                     "  see docs/COUNTERFACTUALS.md\n", key.c_str());
@@ -507,141 +485,6 @@ int cmd_worldfork(int argc, char** argv) {
     if (!identical && !diverged_at_checkpoint)
         std::printf("  final state diverged after an identical checkpoint prefix\n");
     std::printf("  RESULT: %s\n", identical ? "RECONVERGED (identical outcomes)" : "DIVERGED");
-    return 0;
-}
-
-int cmd_experiment(int argc, char** argv) {
-    u64 seed = 2026;
-    u64 horizon_ms = 150;
-    const char* name = "latency_grid";
-    const char* reproduce = nullptr;
-    const char* config_file = nullptr;
-    for (int i = 1; i < argc; ++i) {
-        if (!std::strcmp(argv[i], "--seed")) {
-            if (!parse_u64_option(argc, argv, i, seed)) return 2;
-        } else if (!std::strcmp(argv[i], "--ms")) {
-            if (!parse_u64_option(argc, argv, i, horizon_ms)) return 2;
-        }
-        else if (!std::strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
-        else if (!std::strcmp(argv[i], "--reproduce") && i + 1 < argc) reproduce = argv[++i];
-        else if (!std::strcmp(argv[i], "--config") && i + 1 < argc) config_file = argv[++i];
-    }
-    LogicalNs horizon_ns = 0;
-    if (!millis_to_ns(horizon_ms, horizon_ns)) {
-        std::fprintf(stderr, "--ms is too large\n");
-        return 2;
-    }
-    if (reproduce) {
-        const ReproduceReport rep = experiment_reproduce(reproduce);
-        std::printf("reproduce %s\n  variants checked : %llu\n  hash mismatches : %llu\n",
-                    reproduce, (unsigned long long)rep.variants_checked,
-                    (unsigned long long)rep.hash_mismatches);
-        std::printf("RESULT: %s (%s)\n", rep.ok ? "EXACTLY REPRODUCED" : "REPRODUCTION FAILED",
-                    rep.detail.c_str());
-        return rep.ok ? 0 : 1;
-    }
-    std::filesystem::create_directories("artifacts");
-    const std::string family = name;
-    const auto run_and_write = [&](const std::string& grid_name, Experiment& exp) {
-        const ExperimentResult res = exp.run();
-        const std::string txt = experiment_summary(res, grid_name);
-        const std::string json = experiment_to_json(res, grid_name);
-        std::printf("%s", txt.c_str());
-        const std::string artifact = "artifacts/experiment_" + grid_name + ".json";
-        if (!write_file(artifact, json)) {
-            std::fprintf(stderr, "cannot write %s\n", artifact.c_str());
-            return false;
-        }
-        std::printf("  artifact: %s\n", artifact.c_str());
-        return true;
-    };
-    if (config_file) {
-        // file-driven experiment definition (docs/COUNTERFACTUALS.md grammar)
-        auto cfg = Config::from_file(config_file);
-        if (!cfg) {
-            std::printf("config read failed: %s\n", to_cstr(cfg.status.code));
-            return 1;
-        }
-        // the file's [experiment] section owns seed/horizon; explicit CLI
-        // flags are ignored in this mode, say so instead of silently
-        // surprising the user
-        if (seed != 2026 || horizon_ms != 150)
-            std::printf("  note: --seed/--ms are ignored with --config (the file's [experiment] section wins)\n");
-        const std::string stem = std::filesystem::path(config_file).stem().string();
-        auto exp = Experiment::from_config(cfg.value, stem);
-        if (exp) {
-            // validate every variant up front: a config error must be a
-            // reported CLI error, never a mid-grid construction failure
-            for (const auto& v : exp.value.variants())
-                if (const std::string invalid = v.cfg.validate(); !invalid.empty()) {
-                    std::printf("invalid variant '%s': %s\n", v.name.c_str(), invalid.c_str());
-                    return 2;
-                }
-        }
-        if (!exp) {
-            std::printf("experiment definition invalid: %s (ctx %llu)\n",
-                        to_cstr(exp.status.code), (unsigned long long)exp.status.context);
-            return 1;
-        }
-        if (!run_and_write(stem, exp.value)) return 1;
-        std::printf("  reproduce: arbiter experiment --reproduce artifacts/experiment_%s.json\n", stem.c_str());
-        return 0;
-    }
-    if (family == "latency_sweep") {
-        // Eight-point sweep: where does decision latency start to cost fills?
-        for (u64 i = 0; i < 8; ++i) {
-            const i64 lat = 100 * static_cast<i64>(1 << i);  // 100ns..12.8us
-            WorldConfig base;
-            base.journal_events = false;
-            base.horizon_ns = horizon_ns;
-            base.warmup_ns = 2'000'000;
-            Experiment exp(base);
-            exp.set_seed(seed);
-            exp.set_name("latency_sweep_" + std::to_string(lat));
-            exp.add_variant("baseline_800ns", {{"algo_latency_ns", "800"}});
-            exp.add_variant("sweep", {{"algo_latency_ns", std::to_string(lat)}});
-            if (!run_and_write("latency_sweep_" + std::to_string(lat), exp)) return 1;
-        }
-        std::printf("  reproduce: arbiter experiment --reproduce artifacts/experiment_latency_sweep_3200.json\n");
-        return 0;
-    }
-    if (family == "network_grid") {
-        // jitter/loss cross-grid on the MD channel (the feed-handler path)
-        const std::pair<const char*, std::vector<std::pair<std::string, std::string>>> mutators[] = {
-            {"baseline", {}},
-            {"jitter_500", {{"md_channel.jitter_ns", "500"}}},
-            {"jitter_2000", {{"md_channel.jitter_ns", "2000"}}},
-            {"loss_1pct", {{"md_channel.loss_rate", "0.01"}}},
-            {"loss_2pct", {{"md_channel.loss_rate", "0.02"}}},
-            {"jitter_2000_loss_1pct", {{"md_channel.jitter_ns", "2000"}, {"md_channel.loss_rate", "0.01"}}},
-        };
-        WorldConfig base;
-        base.journal_events = false;
-        base.horizon_ns = horizon_ns;
-        base.warmup_ns = 2'000'000;
-        Experiment exp(base);
-        exp.set_seed(seed);
-        exp.set_name("network_grid");
-        for (const auto& [nm, ovr] : mutators) exp.add_variant(nm, ovr);
-        if (!run_and_write("network_grid", exp)) return 1;
-        std::printf("  reproduce: arbiter experiment --reproduce artifacts/experiment_network_grid.json\n");
-        return 0;
-    }
-    // default: the classic latency grid
-    WorldConfig base;
-    base.journal_events = false;
-    base.horizon_ns = horizon_ns;
-    base.warmup_ns = 2'000'000;
-    Experiment exp(base);
-    exp.set_seed(seed);
-    exp.set_name(name);
-    exp.add_variant("baseline_800ns", {{"algo_latency_ns", "800"}});
-    exp.add_variant("fast_300ns", {{"algo_latency_ns", "300"}});
-    exp.add_variant("slow_3000ns", {{"algo_latency_ns", "3000"}});
-    exp.add_variant("jittery_md", {{"md_channel.jitter_ns", "1500"}});
-    exp.add_variant("lossy_md_1pct", {{"md_channel.loss_rate", "0.01"}});
-    if (!run_and_write(name, exp)) return 1;
-    std::printf("  reproduce: arbiter experiment --reproduce artifacts/experiment_%s.json\n", name);
     return 0;
 }
 
@@ -931,7 +774,7 @@ int cmd_flagship(int argc, char** argv) {
 
     const FlagshipResult res = run_flagship(fc);
     std::string dir = out_dir ? out_dir
-                             : "experiments/FLAGSHIP-" + res.flow_model_name +
+                             : "artifacts/FLAGSHIP-" + res.flow_model_name +
                                    (fc.bots_observe_shadow ? "-frozen" : "-reactive");
     if (Status st = write_flagship_artifacts(dir, res); !st) {
         std::printf("artifact write failed: %s (ctx %llu)\n", to_cstr(st.code),
@@ -1038,95 +881,20 @@ int cmd_fuzz(int argc, char** argv) {
     return 2;
 }
 
-int cmd_demo(int argc, char** argv) {
-    const char* which = argc > 1 ? argv[1] : "all";
-    int demo_status = 0;
-    std::filesystem::create_directories("artifacts");
-    const auto banner = [](const char* s) { std::printf("\n=== DEMO: %s ===\n", s); };
-
-    if (!std::strcmp(which, "all") || !std::strcmp(which, "replay")) {
-        banner("deterministic replay");
-        char a0[] = "arbiter", a1[] = "verify", a2[] = "--seed", a3[] = "42", a4[] = "--ms", a5[] = "50";
-        char* av[] = {a0, a1, a2, a3, a4, a5};
-        cmd_verify(6, av);
-    }
-    if (!std::strcmp(which, "all") || !std::strcmp(which, "recovery")) {
-        banner("crash recovery (journal corruption + repair)");
-        WorldConfig cfg;
-        cfg.journal_events = true;
-        cfg.journal_path = "artifacts/demo_recovery.journal";
-        cfg.horizon_ns = 100'000'000;
-        std::remove(cfg.journal_path.c_str());
-        World w(cfg, 4242);
-        RunStats s = w.run();
-        const u64 full_hash = w.state_hash();
-        std::printf("  original run: %llu events, hash %llu\n", (unsigned long long)s.events_processed,
-                    (unsigned long long)full_hash);
-        // simulate a crash: truncate the journal at 61%
-        const auto size = std::filesystem::file_size(cfg.journal_path);
-        const auto cut = size * 61 / 100;
-        std::filesystem::resize_file(cfg.journal_path, cut);
-        JournalVerifyReport v = journal_verify(cfg.journal_path);
-        std::printf("  after truncation at %llu bytes: clean=%s\n", (unsigned long long)cut,
-                    v.clean ? "yes" : "no");
-        auto kept = journal_recover(cfg.journal_path);
-        ReplayResult r = replay_journal(cfg.journal_path, BookImpl::Optimized, 0, nullptr);
-        std::printf("  recovered %llu records; replay status %s, hash %llu\n",
-                    (unsigned long long)kept.value, to_cstr(r.status.code),
-                    (unsigned long long)r.state_hash);
-        std::printf("  RESULT: RECOVERED PREFIX (truncated-crash semantics, documented)\n");
-    }
-    if (!std::strcmp(which, "all") || !std::strcmp(which, "differential")) {
-        banner("differential verification (reference vs optimized)");
-        char a0[] = "arbiter", a1[] = "fuzz", a2[] = "--target", a3[] = "differential", a4[] = "--iters", a5[] = "3000";
-        char* av[] = {a0, a1, a2, a3, a4, a5};
-        demo_status = cmd_fuzz(6, av);
-    }
-    if (!std::strcmp(which, "all") || !std::strcmp(which, "counterfactual")) {
-        banner("counterfactual worlds (same seed, different latency)");
-        char a0[] = "arbiter", a1[] = "experiment", a2[] = "--seed", a3[] = "2026", a4[] = "--ms", a5[] = "150";
-        char* av[] = {a0, a1, a2, a3, a4, a5};
-        demo_status = cmd_experiment(6, av);
-    }
-    if (!std::strcmp(which, "all") || !std::strcmp(which, "perf")) {
-        banner("performance investigation");
-        const char* bench = std::getenv("ARBITER_BENCH");
-        std::string cmd = std::string(bench && *bench ? bench : "./build/arbiter_bench");
-        const int exchange_status = std::system((cmd + " exchange").c_str());
-        const int pipeline_status = std::system((cmd + " pipeline").c_str());
-        if (exchange_status != 0 || pipeline_status != 0) {
-            std::fprintf(stderr, "performance demo failed (exchange=%d, pipeline=%d)\n",
-                         exchange_status, pipeline_status);
-            demo_status = 1;
-        }
-    }
-    return demo_status;
-}
-
 void print_usage() {
-    std::printf(
-        "ARBITER-X — deterministic counterfactual execution laboratory (research/simulation only)\n\n"
-        "usage: arbiter <command> [options]\n"
-        "  simulate    --seed S --ms MS --out PATH   run a world, journal it\n"
-        "  verify      [--seed S --ms MS]            run twice, compare hashes\n"
-        "  replay      --journal F [--until N]       rebuild + verify from journal\n"
-        "  journal     inspect|verify|recover F      journal tooling\n"
-        "  timetravel  --journal F --event N         state at event N (book)\n"
-        "  worldcheck  [--seed S --events N]         save a full-world checkpoint\n"
-        "  worldjump   --snap F.wsnap [--events N]   restore + continue a world\n"
-        "  worldfork   --snap F.wsnap --variable k=v fork one variable, compare\n"
-        "  experiment  [--seed S --ms MS [--name latency_grid|latency_sweep|network_grid]]\n"
-        "                                               counterfactual grid (+artifacts)\n"
-        "  experiment  --config FILE.axexp               file-driven grid (see configs/)\n"
-        "  experiment  --reproduce ARTIFACT.json         re-run + verify hashes exactly\n"
-        "  flagship    [--config F] [--total-ns N] [--flow poisson|clustered]\n"
-        "              [--seed S --seeds N] [--frozen]  fixed-total allocation study\n"
-        "  flagship    --reproduce ARTIFACT.json         verify flagship hashes exactly\n"
-        "  simstats    [--seed S --ms MS]            simulator statistics (level-2)\n"
-        "  research    validate|features|evaluate|backtest|run|reproduce|calibrate\n"
-        "                                               quantitative research pipeline\n"
-        "  fuzz        protocol|differential|adversarial|corpus  adversarial verification\n"
-        "  demo        replay|recovery|differential|counterfactual|perf|all\n");
+    std::puts("ARBITER-X deterministic execution laboratory\n"
+      "  simulate [--seed S --ms MS --out PREFIX]\n"
+      "  verify [--seed S --ms MS]\n"
+      "  replay --journal FILE [--until N --book ref|opt]\n"
+      "  journal inspect|verify|recover FILE\n"
+      "  worldcheck [--seed S --events N --out FILE]\n"
+      "  worldjump --snap FILE [--events N]\n"
+      "  worldfork --snap FILE --variable key=value [--events N]\n"
+      "  flagship [--config FILE --out DIR] [--reproduce RESULTS.json]\n"
+      "  simstats [--seed S --ms MS --self-excitation K]\n"
+      "  fuzz --target differential|protocol|adversarial|corpus [--iters N]\n"
+      "Historical research and general grids: arbiter-lab (optional LAB).\n"
+      "Benchmarks: arbiter_bench [all|exchange|protocol|journal|pipeline] [--quick]");
 }
 
 }  // namespace
@@ -1137,6 +905,11 @@ int main(int argc, char** argv) {
         return 0;
     }
     const std::string cmd = argv[1];
+    if (cmd == "--version") {
+        std::printf("ARBITER-X %s %s (%s) %s / %s\n",build::version(),build::revision(),
+                    build::source_state(),build::compiler_id().c_str(),build::platform_id().c_str());
+        return 0;
+    }
     if (cmd == "help" || cmd == "--help" || cmd == "-h") {
         print_usage();
         return 0;
@@ -1150,26 +923,28 @@ int main(int argc, char** argv) {
         else if (cmd == "verify") rc = cmd_verify(argc - 1, argv + 1);
         else if (cmd == "replay") rc = cmd_replay(argc - 1, argv + 1);
         else if (cmd == "journal") rc = cmd_journal(argc - 1, argv + 1);
-        else if (cmd == "timetravel") rc = cmd_timetravel(argc - 1, argv + 1);
         else if (cmd == "worldcheck") rc = cmd_worldcheck(argc - 1, argv + 1);
         else if (cmd == "worldjump") rc = cmd_worldjump(argc - 1, argv + 1);
         else if (cmd == "worldfork") rc = cmd_worldfork(argc - 1, argv + 1);
-        else if (cmd == "experiment") rc = cmd_experiment(argc - 1, argv + 1);
         else if (cmd == "flagship") rc = cmd_flagship(argc - 1, argv + 1);
         else if (cmd == "simstats") rc = cmd_simstats(argc - 1, argv + 1);
-        else if (cmd == "research") rc = cmd_research(argc - 1, argv + 1);
         else if (cmd == "fuzz") rc = cmd_fuzz(argc - 1, argv + 1);
-        else if (cmd == "demo") rc = cmd_demo(argc - 1, argv + 1);
-        else if (cmd == "bench") {
-            std::printf("use ./build/arbiter_bench [all|exchange|protocol|journal|pipeline]\n");
-            rc = 0;
+        else if (cmd == "research" || cmd == "experiment") {
+            std::fprintf(stderr, "Use arbiter-lab %s (https://github.com/GodsFinest/ARBITER-X-LAB)\n", cmd.c_str());
+            rc = 2;
+        } else if (cmd == "timetravel" || cmd == "demo" || cmd == "bench") {
+            std::fputs("Use replay --until for time travel, examples/flagship.sh for demonstrations, or arbiter_bench for benchmarks.\n", stderr);
+            rc = 2;
         } else {
             std::printf("unknown command: %s\n", cmd.c_str());
             rc = 2;
         }
-    } catch (const std::exception& e) {
+    } catch (const std::invalid_argument& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         rc = 2;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "error: %s\n", e.what());
+        rc = 1;
     }
     return rc;
 }

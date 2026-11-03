@@ -280,7 +280,8 @@ Status OptBook::add_order(const Order& o, std::vector<Fill>& fills, AddResult* o
         if (partially_executable) return fail(Errc::InsufficientLiquidity, o.id);
     }
 
-    // Commit-phase infallibility: secure the node + index resources a resting
+    // Node/index preflight only: fills may allocate during matching, so this
+    // is not a blanket bad_alloc strong guarantee. Secure resources a resting
     // remainder needs BEFORE matching mutates anything. The projection is
     // exact: match_against consumes exactly min(qty, available) (both walk
     // the same crossing levels), so a remainder exists iff

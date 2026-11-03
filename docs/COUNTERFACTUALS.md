@@ -56,8 +56,7 @@ Controls:
 * **pairing**: cells are paired by macro-seed; the seed is the unit of
   replication (within-world events are not treated as independent).
 * **statistics**: per-contrast paired differences across seeds, sign
-  permutation p-values, Holm correction across the contrast family, HAC CI
-  reported alongside iid CI, economic materiality threshold stated up front
+  permutation p-values, Holm correction across the contrast family and descriptive IID seed-level CIs, economic materiality threshold stated up front
   (ticks*qty per filled lot). Holm is the correction applied in the flagship;
   Bonferroni and BH-FDR are implemented and unit-tested, available for future
   multi-family studies.
@@ -71,52 +70,14 @@ per-seed economics + state hashes, contrast family, findings. Reproduce
 bit-for-bit when compiler and platform provenance match:
 `arbiter flagship --reproduce <results.json>`.
 
-## Prior latency experiments (superseded as evidence for H0-allocation)
+## General grids
 
-The supporting latency grid/sweep (`arbiter experiment`, `configs/*.axexp`)
-vary TOTAL latency. They answer "does
-the total matter", which is a different question from the flagship's "does
-placement matter at a fixed total". They remain valid infrastructure
-validation and are kept as supporting records; they must NOT be cited as
-evidence for or against allocation non-fungibility.
-
-Classic measured results (seed 2026, re-baselined after the engine's
-transport/risk-ledger repairs; regenerate with
-`arbiter experiment --seed 2026 --ms 40`, never hand-edit):
-
-| variant | events | trades | MM fills | MM PnL (ticks*qty) | first divergent checkpoint |
-|---|---|---|---|---|---|
-| baseline_800ns | 14183 | 1014 | 14 | 150 | identical |
-| fast_300ns | 14182 | 1014 | 14 | 150 | @checkpoint(event 512) |
-| slow_3000ns | 14178 | 1022 | 11 | 125 | @checkpoint(event 512) |
-| jittery_md | 14354 | 1014 | 14 | 150 | @checkpoint(event 256) |
-| lossy_md_1pct | 14227 | 1014 | 14 | 150 | @checkpoint(event 256) |
-
-Reading: state divergence does not imply economic divergence. The reported
-value is the first differing hash CHECKPOINT (an upper bound on where the
-histories split), not the exact causal event.
+Total-latency, network and fee grids moved to
+[ARBITER-X-LAB](https://github.com/GodsFinest/ARBITER-X-LAB). Core worldfork
+retains the same strict dotted-key overrides without depending on the grid runner.
 
 ## Queue-model accuracy
 
 See docs/EXECUTION_MODEL.md "Queue-position model": the live metric reports
 the point estimate AND the structural ambiguity bound
 (`mm_ambiguous_fill_qty`). Real fills are authoritative for economics.
-
-## Experiment configuration
-
-Experiments are defined in two equivalent ways:
-
-1. **File-driven** (preferred): a `.axexp` file using the sectioned
-   `key = value` grammar, run with `arbiter experiment --config FILE`.
-   Unknown keys are LOUD failures, never ignored. The same override-table
-   mechanism covers the new research variables
-   (`sim.taker_self_excitation`, `bots_observe_shadow`, `stage_tracing`,
-   `momentum.id_base`).
-
-2. **Built-in families**: `arbiter experiment --name
-   latency_grid|latency_sweep|network_grid`.
-
-Every artifact records the full definition (seed, horizon,
-definition_hash, per-variant override sets) so `arbiter experiment
---reproduce ARTIFACT.json` re-runs the exact grid and verifies every hash
-bit-for-bit when compiler and platform provenance match.

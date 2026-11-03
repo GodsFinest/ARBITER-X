@@ -75,7 +75,6 @@ jobs:
       - name: Script checks
         run: |
           sh -n scripts/reproduce_all.sh examples/flagship.sh
-          python3 -m py_compile tools/research/*.py
       - name: Complete reproduction workflow
         if: matrix.name == 'apple-clang'
         env:

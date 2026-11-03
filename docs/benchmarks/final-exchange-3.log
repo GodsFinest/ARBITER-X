@@ -1,0 +1,17 @@
+=== environment ===
+  cpu          : Apple M1
+  cores        : 8
+  ram_bytes    : 8589934592
+  build        : Release (clang 17.0.0 (clang-1700.6.3.2); C++23, __cplusplus=202302)
+  arch         : arm64
+  note         : PMU counters are not collected; wall-clock only
+=== order book micro (add/cancel/taker mix, 500000 ops, sampled every 8th op) ===
+  reference book (std::map/list)     n=62500     p50=    125ns p90=    250ns p99=    458ns p99.9=      625ns max=    35666ns  ops/s=  8006116
+    aggregate: 9233674 ops/s
+  optimized book (ladder+pool)       n=62500     p50=     42ns p90=    250ns p99=    791ns p99.9=     1500ns max=     5167ns  ops/s=  9144815
+    aggregate: 10344328 ops/s
+=== allocation probe (steady-state hot path) ===
+    allocations during setup: build workload              : 13
+    allocations during opt book pass2 (grown structures)  : 1
+    allocations during ref book pass2 (std::map/list)     : 188905
+done.

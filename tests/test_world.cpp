@@ -1,6 +1,7 @@
 #include "testfw.hpp"
 
 #include "arbiter/errors.hpp"
+#include "../src/journal/journal_test_hooks.hpp"
 #include "arbiter/metrics.hpp"
 #include "arbiter/net.hpp"
 #include "arbiter/risk.hpp"
@@ -8,7 +9,7 @@
 #include "arbiter/strategy.hpp"
 #include "arbiter/wire.hpp"
 #include "arbiter/replay.hpp"
-#include "arbiter/experiment.hpp"
+#include "arbiter/world_overrides.hpp"
 #include "arbiter/world.hpp"
 #include "arbiter/world_snapshot.hpp"
 
@@ -366,20 +367,20 @@ WorldConfig test_world_config() {
 
 #ifdef ARBITER_ENABLE_JOURNAL_TEST_HOOKS
 struct JournalFailureHookGuard {
-    explicit JournalFailureHookGuard(JournalWriter::FailureHook hook) {
-        JournalWriter::set_failure_hook_for_tests(hook);
+    explicit JournalFailureHookGuard(journal_test::FailureHook hook) {
+        journal_test::set_failure_hook_for_tests(hook);
     }
-    ~JournalFailureHookGuard() { JournalWriter::set_failure_hook_for_tests(nullptr); }
+    ~JournalFailureHookGuard() { journal_test::set_failure_hook_for_tests(nullptr); }
 };
 
-Status fail_journal_append(JournalWriter::JournalFailurePoint point) {
-    return point == JournalWriter::JournalFailurePoint::Append
+Status fail_journal_append(journal_test::JournalFailurePoint point) {
+    return point == journal_test::JournalFailurePoint::Append
                ? fail(Errc::IoError, 0xA11)
                : good();
 }
 
-Status fail_journal_sync(JournalWriter::JournalFailurePoint point) {
-    return point == JournalWriter::JournalFailurePoint::Sync
+Status fail_journal_sync(journal_test::JournalFailurePoint point) {
+    return point == journal_test::JournalFailurePoint::Sync
                ? fail(Errc::IoError, 0x5A7C)
                : good();
 }
@@ -656,12 +657,12 @@ AX_TEST(world_config_hash_preserves_behavioral_double_bits) {
 AX_TEST(experiment_overrides_parse_strictly) {
     WorldConfig cfg;
     std::string err;
-    CHECK(Experiment::apply_key_pub(cfg, "sim.cancel_fraction", "0.25", err));
+    CHECK(apply_world_override(cfg, "sim.cancel_fraction", "0.25", err));
     CHECK(std::fabs(cfg.sim.cancel_fraction - 0.25) < 1e-12);
-    CHECK(!Experiment::apply_key_pub(cfg, "mm.half_spread_ticks", "3junk", err));
-    CHECK(!Experiment::apply_key_pub(cfg, "md_channel.loss_rate", "1.1", err));
-    CHECK(!Experiment::apply_key_pub(cfg, "risk.max_order_qty", "-1", err));
-    CHECK(!Experiment::apply_key_pub(cfg, "risk.enabled", "maybe", err));
+    CHECK(!apply_world_override(cfg, "mm.half_spread_ticks", "3junk", err));
+    CHECK(!apply_world_override(cfg, "md_channel.loss_rate", "1.1", err));
+    CHECK(!apply_world_override(cfg, "risk.max_order_qty", "-1", err));
+    CHECK(!apply_world_override(cfg, "risk.enabled", "maybe", err));
 }
 
 AX_TEST(world_md_gap_recovery_converges) {
@@ -798,159 +799,6 @@ AX_TEST(world_journal_replay_book_matches) {
 }
 
 
-AX_TEST(experiment_artifact_reproduces_exactly) {
-    // The artifact records the full grid definition (definition_hash) +
-    // per-variant override sets + genealogy; `experiment_reproduce` re-runs
-    // it and verifies every hash bit-for-bit. Any grid
-    // expressible as (variable, value) overrides, not just built-in names.
-    std::filesystem::create_directories("artifacts");
-    WorldConfig base;
-    base.journal_events = false;
-    base.horizon_ns = 40'000'000;
-    base.warmup_ns = 2'000'000;
-    Experiment exp(base);
-    exp.set_seed(2026);
-    exp.set_name("repro_grid");
-    exp.add_variant("baseline_800ns", {{"algo_latency_ns", "800"}});
-    exp.add_variant("fast_300ns", {{"algo_latency_ns", "300"}});
-    exp.add_variant("half_spread_4t", {{"mm.half_spread_ticks", "4"}});
-    const ExperimentResult res = exp.run();
-    const std::string json = experiment_to_json(res, "repro_grid");
-    const std::string path = "artifacts/experiment_repro_grid.json";
-    { FILE* f = fopen(path.c_str(), "wb"); fwrite(json.data(), 1, json.size(), f); fclose(f); }
-
-    const ReproduceReport rep = experiment_reproduce(path);
-    CHECK(rep.ok);
-    CHECK_EQ(rep.variants_checked, 3u);
-    CHECK_EQ(rep.hash_mismatches, 0u);
-    if (!rep.ok) std::printf("  reproduce detail: %s\n", rep.detail.c_str());
-
-    // tamper with one recorded hash -> reproduction must FAIL loudly
-    std::string tampered = json;
-    const std::string needle = "\"final_hash\": " + std::to_string(res.final_hashes[1]);
-    const std::string repl = "\"final_hash\": " + std::to_string(res.final_hashes[1] ^ 0x1);
-    const size_t at = tampered.find(needle);
-    CHECK_NE(at, std::string::npos);
-    if (at != std::string::npos) {
-        tampered.replace(at, needle.size(), repl);
-        FILE* f = fopen("artifacts/experiment_tampered.json", "wb");
-        CHECK(f != nullptr);
-        if (f) {
-            fwrite(tampered.data(), 1, tampered.size(), f);
-            fclose(f);
-        }
-        const ReproduceReport bad = experiment_reproduce("artifacts/experiment_tampered.json");
-        CHECK(!bad.ok);
-        CHECK(bad.hash_mismatches > 0);
-    }
-}
-
-AX_TEST(experiment_from_config_file) {
-    // File-driven experiment definitions (docs/COUNTERFACTUALS.md grammar):
-    // [experiment] seed/horizon; [baseline] overrides; [variant.NAME] one or
-    // more variables (section names are dotted, the parser flattens
-    // [variant.NAME] key = x  to  variant.NAME.key). The loaded grid must
-    // match the equivalent hand-built grid EXACTLY (definition hash +
-    // results) and reproduce from its artifact. Unknown keys are loud
-    // failures, never ignored.
-    std::filesystem::create_directories("artifacts");
-    const char* def =
-        "[experiment]\n"
-        "name = file_grid\n"
-        "seed = 77123\n"
-        "horizon_ms = 30\n"
-        "[baseline]\n"
-        "algo_latency_ns = 800\n"
-        "[variant.slow]\n"
-        "algo_latency_ns = 3000\n"
-        "[variant.wide_fees]\n"
-        "mm.half_spread_ticks = 4\n"
-        "fee_per_lot = 2\n";
-    Status cfg_st;
-    Config cfg = Config::from_string(def, &cfg_st);
-    CHECK(cfg_st);
-    if (!cfg_st) return;
-    auto exp = Experiment::from_config(cfg, "file_grid");
-    CHECK(exp);
-    if (!exp) {
-        std::printf("  from_config failed: %s\n", to_cstr(exp.status.code));
-        return;
-    }
-    const ExperimentResult res = exp.value.run();
-    CHECK_EQ(res.names.size(), 3u);
-    // equivalent hand-built grid (baseline override recorded the same way)
-    WorldConfig base;
-    base.journal_events = false;
-    base.horizon_ns = 30'000'000;
-    base.warmup_ns = 2'000'000;
-    Experiment manual(base);
-    manual.set_seed(77123);
-    manual.set_name("file_grid");
-    manual.add_variant("baseline", {{"algo_latency_ns", "800"}});
-    manual.add_variant("slow", {{"algo_latency_ns", "3000"}});
-    manual.add_variant("wide_fees", {{"mm.half_spread_ticks", "4"}, {"fee_per_lot", "2"}});
-    const ExperimentResult res2 = manual.run();
-    CHECK_EQ(res.definition_hash, res2.definition_hash);
-    CHECK_EQ(res.final_hashes.size(), res2.final_hashes.size());
-    for (size_t i = 0; i < res.final_hashes.size(); ++i)
-        CHECK_EQ(res.final_hashes[i], res2.final_hashes[i]);
-    // artifact of the file-driven run reproduces exactly
-    const std::string json = experiment_to_json(res, "file_grid");
-    const std::string path = "artifacts/experiment_file_grid.json";
-    { FILE* f = fopen(path.c_str(), "wb"); fwrite(json.data(), 1, json.size(), f); fclose(f); }
-    const ReproduceReport rep = experiment_reproduce(path);
-    CHECK(rep.ok);
-    CHECK_EQ(rep.variants_checked, 3u);
-    // unknown keys must fail loudly
-    const char* bad_def =
-        "[experiment]\nseed = 1\n[variant.oops]\nnonsense_key = 5\n";
-    Status bad_st;
-    Config bad_cfg = Config::from_string(bad_def, &bad_st);
-    CHECK(bad_st);
-    if (bad_st) {
-        auto bad = Experiment::from_config(bad_cfg, "bad");
-        CHECK(!bad);
-        CHECK_EQ(bad.status.code, Errc::InvalidArgument);
-    }
-}
-
-AX_TEST(experiment_latency_grid_produces_comparison) {
-    // NOTE: this test writes a scratch artifact, NOT the canonical
-    // artifacts/experiment_latency_grid.json (that file is the CLI default
-    // grid at --ms 150 cited by README/docs, a test grid with different
-    // variants must never clobber it).
-    std::filesystem::create_directories("artifacts");
-    WorldConfig base;
-    base.journal_events = false;
-    base.horizon_ns = 150'000'000;
-    base.warmup_ns = 2'000'000;
-    Experiment exp(base);
-    exp.set_seed(2026);
-    exp.add_variant("baseline_800ns", {{"algo_latency_ns", "800"}});
-    exp.add_variant("fast_300ns", {{"algo_latency_ns", "300"}});
-    exp.add_variant("slow_3000ns", {{"algo_latency_ns", "3000"}});
-    exp.add_variant("jittery_md", {{"md_channel.jitter_ns", "1500"}});
-    auto res = exp.run();
-    CHECK_EQ(res.names.size(), 4u);
-    // identical baseline hash when re-run (variant 0 == base with 800ns? no:
-    // baseline uses default 300ns unless mutated, assert determinism instead)
-    CHECK(res.final_hashes[0] != 0);
-    // divergence reported for at least the slow variant
-    CHECK(res.first_divergence_event[2] != ~u64{0} || res.final_hashes[2] == res.final_hashes[0]);
-    const std::string json = experiment_to_json(res, "latency_grid");
-    const std::string txt = experiment_summary(res, "latency_grid");
-    CHECK(json.size() > 100);
-    CHECK(txt.size() > 100);
-    std::printf("%s", txt.c_str());
-    FILE* f = fopen("artifacts/test_tmp_latency_grid.json", "wb");
-    CHECK(f != nullptr);
-    if (f) {
-        fwrite(json.data(), 1, json.size(), f);
-        fclose(f);
-    }
-}
-
-// ---------------- engine contracts: identity, determinism, flow regimes ----------------
 AX_TEST(config_hash_covers_all_behavior_fields) {
     const WorldConfig base;
     const u64 h0 = base.hash();
@@ -1396,19 +1244,19 @@ AX_TEST(world_config_hash_near_neighbor_doubles_all_distinct) {
 AX_TEST(experiment_overrides_reject_more_malformed_values) {
     WorldConfig cfg;
     std::string err;
-    CHECK(!Experiment::apply_key_pub(cfg, "horizon_ns", "99999999999999999999999", err));  // overflow
-    CHECK(!Experiment::apply_key_pub(cfg, "mm.account", "7.5", err));                       // not an integer
-    CHECK(!Experiment::apply_key_pub(cfg, "md_channel.reorder_slot_ns", "-5", err));        // negative delay
-    CHECK(!Experiment::apply_key_pub(cfg, "md_channel.reorder_window", "-3", err));         // negative unsigned
-    CHECK(!Experiment::apply_key_pub(cfg, "risk.max_msgs_per_window", "4294967296", err));  // > u32
-    CHECK(!Experiment::apply_key_pub(cfg, "sim.cancel_fraction", "nan", err));
-    CHECK(!Experiment::apply_key_pub(cfg, "sim.cancel_fraction", "-0.1", err));
-    CHECK(!Experiment::apply_key_pub(cfg, "sim.cancel_fraction", "1.5", err));
-    CHECK(!Experiment::apply_key_pub(cfg, "sim.cancel_fraction", "0.25 ", err));  // trailing junk
-    CHECK(!Experiment::apply_key_pub(cfg, "unknown_key", "1", err));
-    CHECK(Experiment::apply_key_pub(cfg, "md_channel.jitter_ns", "250", err));
+    CHECK(!apply_world_override(cfg, "horizon_ns", "99999999999999999999999", err));  // overflow
+    CHECK(!apply_world_override(cfg, "mm.account", "7.5", err));                       // not an integer
+    CHECK(!apply_world_override(cfg, "md_channel.reorder_slot_ns", "-5", err));        // negative delay
+    CHECK(!apply_world_override(cfg, "md_channel.reorder_window", "-3", err));         // negative unsigned
+    CHECK(!apply_world_override(cfg, "risk.max_msgs_per_window", "4294967296", err));  // > u32
+    CHECK(!apply_world_override(cfg, "sim.cancel_fraction", "nan", err));
+    CHECK(!apply_world_override(cfg, "sim.cancel_fraction", "-0.1", err));
+    CHECK(!apply_world_override(cfg, "sim.cancel_fraction", "1.5", err));
+    CHECK(!apply_world_override(cfg, "sim.cancel_fraction", "0.25 ", err));  // trailing junk
+    CHECK(!apply_world_override(cfg, "unknown_key", "1", err));
+    CHECK(apply_world_override(cfg, "md_channel.jitter_ns", "250", err));
     CHECK_EQ(cfg.md_channel.jitter_ns, 250);
-    CHECK(Experiment::apply_key_pub(cfg, "sim.cancel_fraction", "0.25", err));
+    CHECK(apply_world_override(cfg, "sim.cancel_fraction", "0.25", err));
     CHECK(std::fabs(cfg.sim.cancel_fraction - 0.25) < 1e-12);
 }
 
@@ -1810,6 +1658,32 @@ AX_TEST(gtd_expiry_shares_the_cancel_release_path) {
     // expiry event -> cancel_in_book -> book cancel succeeds
     CHECK(book.cancel(5));
     CHECK(!book.has(5));
+}
+
+
+AX_TEST(authoritative_cash_includes_fees) {
+    WorldConfig cfg; cfg.journal_events=false; cfg.horizon_ns=60'000'000;
+    cfg.fee_per_lot=3;
+    World world(cfg,42); const auto result=world.run();
+    CHECK(result.mm_auth_fees>0);
+    CHECK_EQ(result.mm_auth_filled_qty,result.mm_real_filled_qty);
+    CHECK_EQ(result.mm_auth_inventory,result.mm_inventory);
+    CHECK_EQ(result.mm_auth_cash,result.mm_cash);
+    cfg.exec_channel.loss_rate=1.0;
+    World lost(cfg,42); const auto charged=lost.run();
+    cfg.fee_per_lot=0;
+    World free(cfg,42); const auto uncharged=free.run();
+    CHECK(charged.mm_auth_fees>0);
+    CHECK_EQ(charged.mm_cash,0);
+    CHECK_EQ(charged.mm_auth_filled_qty,uncharged.mm_auth_filled_qty);
+    CHECK_EQ(charged.mm_auth_cash,uncharged.mm_auth_cash-charged.mm_auth_fees);
+}
+AX_TEST(md_duplicate_counts_receiver_suppressions_once) {
+    WorldConfig cfg; cfg.journal_events=false; cfg.horizon_ns=60'000'000;
+    cfg.md_channel.jitter_ns=0; cfg.md_channel.dup_rate=1.0;
+    World world(cfg,42); const auto result=world.run();
+    CHECK(result.md_published>0); CHECK_EQ(result.md_gap_events,0);
+    CHECK_EQ(result.md_duplicated,result.md_delivered);
 }
 
 AX_TEST_MAIN

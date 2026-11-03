@@ -116,9 +116,14 @@ Two views are kept deliberately apart:
   that staleness is a measured fault effect, not a bug, and it can influence
   subsequent strategy decisions (which is the point of the fault study).
 
-Reported research economics (`mm_auth_*`, `mom_auth_*` in the JSON and the
+The authoritative economics fields (`mm_auth_*`, `mom_auth_*` in the JSON and the
 `MM/MOM auth (exchange ledger)` summary rows) come from the authoritative
 ledger; the strategy-local fields are labeled as the behavioral view.
+The preserved fixed-total flagship uses strategy-local cash and inventory at
+its horizon for its marked-PnL endpoint (`run_one` in flagship.cpp), alongside
+separately reported fill quantities. It does not silently substitute the
+exchange ledger or drain all in-flight reports. Changing that endpoint would
+require a separate experimental definition and new results.
 
 ## Terminal semantics and trace cleanup
 

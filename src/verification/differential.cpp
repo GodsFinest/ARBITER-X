@@ -31,6 +31,22 @@ Status apply_op(Op::Kind kind, const Order& ord, u64 target, OptBook& b, std::ve
 
 namespace {
 
+bool ladders_equal(const LadderView& a, const LadderView& b) {
+    const auto side_equal=[](const auto& x,const auto& y) {
+        if(x.size()!=y.size()) return false;
+        for(size_t i=0;i<x.size();++i) {
+            if(x[i].price!=y[i].price || x[i].total_qty!=y[i].total_qty ||
+               x[i].orders.size()!=y[i].orders.size()) return false;
+            for(size_t j=0;j<x[i].orders.size();++j) {
+                const auto& left=x[i].orders[j]; const auto& right=y[i].orders[j];
+                if(left.id!=right.id || left.leaves!=right.leaves || left.qty!=right.qty) return false;
+            }
+        }
+        return true;
+    };
+    return side_equal(a.bids,b.bids) && side_equal(a.asks,b.asks);
+}
+
 bool fills_equal(const std::vector<Fill>& a, const std::vector<Fill>& b) {
     if (a.size() != b.size()) return false;
     for (size_t i = 0; i < a.size(); ++i) {
@@ -78,9 +94,9 @@ Report run_differential(const std::vector<Op>& ops, const Options& opts) {
         } else {
             const u64 href = ref.state_hash();
             const u64 hopt = opt.state_hash();
-            if (href != hopt) {
+            if (href != hopt || !ladders_equal(ref.to_ladder(), opt.to_ladder())) {
                 ++rep.ladder_mismatches;
-                diverge("ladder hash mismatch", href);
+                diverge("ladder view/hash mismatch", href);
             }
         }
 

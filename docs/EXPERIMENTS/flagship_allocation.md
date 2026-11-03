@@ -31,14 +31,14 @@ H0: only the total matters. H1: placement matters.
 * Endpoints: primary = MM marked PnL paired diff at the extremes contrast
   (md0.000 vs md1.000); secondary = filled lots, markouts, taker PnL.
 * Statistics: sign-permutation p-values across seeds (exact enumeration),
-  Holm correction across the 9-contrast family, iid + HAC CIs, economic
+  Holm correction across the 9-contrast family, descriptive IID seed-level CIs, economic
   materiality threshold 1.0 ticks*qty per filled lot (predefined).
 * Engine-verified intervention: realized per-stage means recorded per cell
   from the stage trace.
 
 ## Results (clustered, reactive, the flagship run)
 
-* **Poisson null (k=0)**: EVERY cell identical (MM PnL 168.8, 171.9
+* **Poisson null (k=0)**: every cell has identical mean economics (MM PnL 168.8, 171.9
   lots, all contrasts exactly 0, p=1): allocation has no effect under this
   null market. INTERPRETATION SCOPE: the regime contrast varies the taker
   process's dependence structure AND its realized intensity/sign structure
@@ -107,3 +107,7 @@ Zoican 2019; Kelly & Yudovina 2015); the fixed-total allocation
 decomposition was not found there. The contribution claimed is the
 question + the deterministic instrument, NOT a positive empirical finding
 (this experiment's verdict is UNCERTAIN/UNDERPOWERED).
+
+Eight seeds use 256 exact sign assignments. The configured 5000 repetitions
+apply to larger-sample Monte Carlo tests. Identical economic means do not
+imply identical per-cell state hashes or fill-event counts.

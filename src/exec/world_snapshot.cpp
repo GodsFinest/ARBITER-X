@@ -226,6 +226,7 @@ bool r_ladder(ByteReader& r, LadderView& v) { return decode_ladder(r, v); }
 }  // namespace
 
 Status write_world_snapshot(const std::string& path, const WorldSnapshot& s) {
+    if (s.format_version != kWorldSnapshotVersion) return fail(Errc::Unsupported, s.format_version);
     ByteWriter w;
     w.put_u64(s.config_hash);
     w.put_u64(s.master_seed);
@@ -487,7 +488,7 @@ Result<WorldSnapshot> read_world_snapshot(const std::string& path) {
     const u32 body_len = hr.get_u32();
     const u32 crc = hr.get_u32();
     if (!hr.ok()) return ErrT<WorldSnapshot>(Errc::SnapshotInvalid, 1);
-    if (version != kWorldSnapshotVersion) return ErrT<WorldSnapshot>(Errc::SnapshotInvalid, version);
+    if (version != kWorldSnapshotVersion) return ErrT<WorldSnapshot>(Errc::Unsupported, version);
     if (all.size() != kHeaderSize + body_len) return ErrT<WorldSnapshot>(Errc::SnapshotInvalid, 2);
     if (crc32(p + kHeaderSize, body_len) != crc)
         return ErrT<WorldSnapshot>(Errc::ChecksumMismatch, 0);

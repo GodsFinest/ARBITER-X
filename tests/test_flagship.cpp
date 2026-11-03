@@ -243,4 +243,49 @@ AX_TEST(flagship_rejects_malformed_artifacts) {
 // ---------------- §27: message-type latency granularity ----------------
 
 
+
+AX_TEST(flagship_rejects_incomplete_seed_records) {
+    const std::string source=std::string(AX_SOURCE_DIR)+"/experiments/FLAGSHIP-clustered-reactive/results.json";
+    auto* file=std::fopen(source.c_str(),"rb"); CHECK(file); if(!file)return;
+    std::string text; char buffer[4096]; size_t size;
+    while((size=std::fread(buffer,1,sizeof buffer,file)))text.append(buffer,size);
+    std::fclose(file);
+    const auto at=text.find("{\"seed\":"); CHECK_NE(at,std::string::npos); if(at==std::string::npos)return;
+    const auto end=text.find('}',at); CHECK_NE(end,std::string::npos); if(end==std::string::npos)return;
+    text.erase(at,end-at+1);
+    std::filesystem::create_directories("artifacts");
+    const std::string path="artifacts/incomplete_flagship.json";
+    file=std::fopen(path.c_str(),"wb"); CHECK(file); if(!file)return;
+    std::fwrite(text.data(),1,text.size(),file); std::fclose(file);
+    const auto result=flagship_reproduce(path); CHECK(!result.ok);
+    CHECK(result.detail.find("seed")!=std::string::npos);
+}
+
+AX_TEST(flagship_rejects_out_of_range_durations) {
+    const std::string source = std::string(AX_SOURCE_DIR) +
+        "/experiments/FLAGSHIP-clustered-reactive/results.json";
+    auto* file = std::fopen(source.c_str(), "rb");
+    CHECK(file); if (!file) return;
+    std::string original; char buffer[4096]; size_t size;
+    while ((size = std::fread(buffer, 1, sizeof buffer, file))) original.append(buffer, size);
+    std::fclose(file);
+    std::filesystem::create_directories("artifacts");
+    for (const char* key : {"horizon_ns", "warmup_ns"}) {
+        for (const char* value : {"9223372036854775808", "-9223372036854777856",
+                                  "1e300", "1e999", "NaN"}) {
+            std::string text = original;
+            const auto start = text.find(std::string("\"") + key + "\": ");
+            CHECK_NE(start, std::string::npos); if (start == std::string::npos) return;
+            const auto number = text.find(':', start) + 2;
+            text.replace(number, text.find(',', number) - number, value);
+            const char* path = "artifacts/out_of_range_flagship.json";
+            file = std::fopen(path, "wb"); CHECK(file); if (!file) return;
+            std::fwrite(text.data(), 1, text.size(), file); std::fclose(file);
+            const auto result = flagship_reproduce(path);
+            CHECK(!result.ok);
+            CHECK(result.detail == std::string("invalid ") + key);
+        }
+    }
+}
+
 AX_TEST_MAIN

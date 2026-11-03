@@ -1,6 +1,5 @@
 #include "testfw.hpp"
 
-#include "arbiter/experiment.hpp"
 #include "arbiter/latency.hpp"
 #include "arbiter/metrics.hpp"
 #include "arbiter/world.hpp"
@@ -976,6 +975,30 @@ AX_TEST(worldfork_final_divergence_after_equal_checkpoint_prefix) {
         if (ta[k].second != tb[k].second) { prefix_differs = true; break; }
     CHECK(!prefix_differs || !identical);
     CHECK_NE(a.state_hash(), b.state_hash());
+}
+
+
+AX_TEST(snapshot_format15_rejects_legacy14) {
+    WorldConfig cfg; cfg.journal_events=false; cfg.horizon_ns=60'000'000;
+    cfg.fee_per_lot=3;
+    World world(cfg,42); world.run(2000);
+    auto snap=world.capture_snapshot(); CHECK_EQ(snap.format_version,15u);
+    World restored(cfg,42); CHECK(restored.restore_snapshot(snap,cfg,true));
+    world.run(); restored.run(); CHECK_EQ(world.state_hash(),restored.state_hash());
+    CHECK_EQ(world.stats().mm_auth_cash,restored.stats().mm_auth_cash);
+    snap.format_version=14;
+    World fresh(cfg,42); CHECK_EQ(fresh.restore_snapshot(snap,cfg,true).code,Errc::Unsupported);
+    std::filesystem::create_directories("artifacts");
+    CHECK_EQ(write_world_snapshot("artifacts/legacy14.wsnap",snap).code,Errc::Unsupported);
+    snap.format_version=15;
+    CHECK(write_world_snapshot("artifacts/legacy14.wsnap",snap));
+    auto* file=std::fopen("artifacts/legacy14.wsnap","r+b"); CHECK(file);
+    if(!file)return;
+    std::fseek(file,4,SEEK_SET);
+    for(int byte : {14,0,0,0}) std::fputc(byte,file);
+    std::fclose(file);
+    const auto legacy=read_world_snapshot("artifacts/legacy14.wsnap");
+    CHECK(!legacy); CHECK_EQ(legacy.status.code,Errc::Unsupported);
 }
 
 AX_TEST_MAIN

@@ -44,11 +44,6 @@ public:
     Status sync();   // flush + fsync
     void close() noexcept;
 
-#ifdef ARBITER_ENABLE_JOURNAL_TEST_HOOKS
-    enum class JournalFailurePoint : u8 { Append, Sync };
-    using FailureHook = Status (*)(JournalFailurePoint);
-    static void set_failure_hook_for_tests(FailureHook hook) noexcept;
-#endif
 
     u64 records() const noexcept { return records_; }
     u64 next_seq() const noexcept { return next_seq_; }
@@ -63,9 +58,6 @@ private:
     u64 records_ = 0;
     u64 next_seq_ = 1;
     size_t unflushed_ = 0;
-#ifdef ARBITER_ENABLE_JOURNAL_TEST_HOOKS
-    static FailureHook failure_hook_;
-#endif
 };
 
 class JournalReader {

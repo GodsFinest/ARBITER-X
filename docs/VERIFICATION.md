@@ -5,25 +5,24 @@ external runtime dependencies.
 
 ## Current test inventory
 
-The current suite contains 168 `AX_TEST` cases across 9 test binaries:
+The core contains 142 `AX_TEST` cases across 8 binaries:
 
 | binary | cases |
 |---|---:|
 | `test_book` | 29 |
 | `test_core` | 9 |
 | `test_diff` | 7 |
-| `test_flagship` | 7 |
-| `test_journal` | 9 |
-| `test_quant` | 26 |
-| `test_spsc` | 3 |
-| `test_world` | 57 |
-| `test_worldsnap` | 21 |
-| **total** | **168** |
+| `test_flagship` | 8 |
+| `test_journal` | 10 |
+| `test_stats` | 1 |
+| `test_world` | 56 |
+| `test_worldsnap` | 22 |
 
-This count is re-auditable with `grep -c "^AX_TEST(" tests/*.cpp`. CTest
-registers the same 9 binaries, 4 CLI checks (including 2 `WILL_FAIL` cases),
-and 4 benchmark smoke checks: 17 entries in total (`ctest --test-dir build
--N`).
+CTest also runs CLI, migrated-command, benchmark smoke and installed/relocated
+package checks: 22 entries in the default Release configuration. The package
+consumer check is omitted for sanitizer builds. LAB owns historical/grid tests
+and its integration checks. Recount with `rg -c "^AX_TEST\(" tests/*.cpp` and
+`ctest --test-dir build -N`; test counts are not correctness guarantees.
 
 ## Layers
 

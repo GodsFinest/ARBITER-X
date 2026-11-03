@@ -2,11 +2,14 @@
 #include "arbiter/flagship.hpp"
 #include "arbiter/errors.hpp"
 #include "arbiter/hash.hpp"
-#include "arbiter/research.hpp"
+#include "arbiter/build_info.hpp"
 #include "arbiter/rng.hpp"
 #include "arbiter/stats.hpp"
 
 #include <cmath>
+#include <cerrno>
+#include <cctype>
+#include <limits>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -108,9 +111,12 @@ FlagshipResult run_flagship(const FlagshipConfig& fc) {
     FlagshipResult res;
     res.cfg = fc;
     res.flow_model_name = fc.flow_model == FlowModel::Poisson ? "poisson" : "clustered";
-    res.compiler = research::compiler_id();
-    res.platform = research::platform_id();
-    res.created_utc = research::utc_now();
+    res.compiler = build::compiler_id();
+    res.platform = build::platform_id();
+    res.created_utc = build::utc_now();
+    res.core_version = build::version();
+    res.core_revision = build::revision();
+    res.core_source_state = build::source_state();
 
     // definition hash: everything that changes numbers
     {
@@ -312,8 +318,11 @@ bool scan_num(const std::string& text, const std::string& key, double& out) {
     size_t pos = text.find(pat);
     if (pos == std::string::npos) return false;
     pos += pat.size();
-    out = std::strtod(text.c_str() + pos, nullptr);
-    return true;
+    const char* start=text.c_str()+pos; char* end=nullptr; errno=0;
+    out = std::strtod(start, &end);
+    if(errno==ERANGE || end==start || !std::isfinite(out)) return false;
+    while(std::isspace(static_cast<unsigned char>(*end))) ++end;
+    return *end==',' || *end==']' || *end=='}';
 }
 
 bool scan_int(const std::string& text, const std::string& key, u64& out) {
@@ -321,8 +330,12 @@ bool scan_int(const std::string& text, const std::string& key, u64& out) {
     size_t pos = text.find(pat);
     if (pos == std::string::npos) return false;
     pos += pat.size();
-    out = std::strtoull(text.c_str() + pos, nullptr, 10);
-    return true;
+    const char* start=text.c_str()+pos; char* end=nullptr; errno=0;
+    if(*start=='-') return false;
+    out = std::strtoull(start, &end, 10);
+    if(errno==ERANGE || end==start) return false;
+    while(std::isspace(static_cast<unsigned char>(*end))) ++end;
+    return *end==',' || *end==']' || *end=='}';
 }
 
 bool read_file(const std::string& path, std::string& out) {
@@ -376,6 +389,9 @@ std::string flagship_to_json(const FlagshipResult& r) {
     out += "],\n";
     out += "  \"compiler\": \"" + r.compiler + "\",\n  \"platform\": \"" + r.platform + "\",\n";
     out += "  \"created_utc\": \"" + r.created_utc + "\",\n";
+    out += "  \"core_version\": \"" + r.core_version + "\",\n";
+    out += "  \"core_revision\": \"" + r.core_revision + "\",\n";
+    out += "  \"core_source_state\": \"" + r.core_source_state + "\",\n";
     out += "  \"cells\": [\n";
     for (size_t c = 0; c < r.cells.size(); ++c) {
         const CellResult& cell = r.cells[c];
@@ -559,6 +575,7 @@ FlagshipReproReport flagship_reproduce(const std::string& artifact_path) {
         rep.detail = "missing flow_model";
         return rep;
     }
+    if(flow!="clustered" && flow!="poisson") { rep.detail="invalid flow_model"; return rep; }
     u64 def_hash = 0;
     if (!scan_int(text, "definition_hash", def_hash)) {
         rep.detail = "missing definition_hash";
@@ -567,7 +584,7 @@ FlagshipReproReport flagship_reproduce(const std::string& artifact_path) {
     i64 total_ns = 0;
     {
         double v = 0;
-        if (!scan_num(text, "total_latency_ns", v)) {
+        if (!scan_num(text, "total_latency_ns", v) || v<0 || v>=9223372036854775808.0) {
             rep.detail = "missing total_latency_ns";
             return rep;
         }
@@ -591,8 +608,13 @@ FlagshipReproReport flagship_reproduce(const std::string& artifact_path) {
         while (p < text.size() && text[p] != ']') {
             if (text[p] >= '0' && text[p] <= '9') {
                 u64 v = 0;
-                while (p < text.size() && text[p] >= '0' && text[p] <= '9')
-                    v = v * 10 + static_cast<u64>(text[p++] - '0');
+                while (p < text.size() && text[p] >= '0' && text[p] <= '9') {
+                    const u64 digit=static_cast<u64>(text[p++]-'0');
+                    if(v>(std::numeric_limits<u64>::max()-digit)/10) {
+                        rep.detail="seed overflow"; return rep;
+                    }
+                    v=v*10+digit;
+                }
                 seeds.push_back(v);
             } else {
                 ++p;
@@ -621,7 +643,8 @@ FlagshipReproReport flagship_reproduce(const std::string& artifact_path) {
             RepCell cell;
             const size_t nend = text.find('"', p + 10);
             cell.name = text.substr(p + 10, nend - (p + 10));
-            scan_num(text.substr(p, text.find("]},", p) - p), "md_share", cell.md_share);
+            if(!scan_num(text.substr(p, text.find("]},", p) - p), "md_share", cell.md_share) ||
+               cell.md_share<0 || cell.md_share>1) { rep.detail="invalid md_share"; return rep; }
             // per-seed records inside this cell
             const size_t cell_end = text.find("]},", p);
             std::string rec = text.substr(p, cell_end == std::string::npos
@@ -629,19 +652,27 @@ FlagshipReproReport flagship_reproduce(const std::string& artifact_path) {
                                                    : cell_end - p);
             size_t q = 0;
             while ((q = rec.find("{\"seed\":", q)) != std::string::npos) {
-                u64 s = 0;
-                if (!scan_int(rec.substr(q), "final_hash", s)) {
-                    rep.detail = "cell seed record missing final_hash";
-                    return rep;
+                const size_t end=rec.find('}',q);
+                if(end==std::string::npos) { rep.detail="incomplete seed record"; return rep; }
+                const std::string record=rec.substr(q,end-q+1);
+                u64 seed=0, hash=0;
+                const size_t index=cell.hash.size();
+                if(index>=seeds.size() || !scan_int(record,"seed",seed) || seed!=seeds[index] ||
+                   !scan_int(record,"final_hash",hash)) {
+                    rep.detail="cell seed order/count/hash mismatch"; return rep;
                 }
-                cell.hash.push_back(s);
-                double mm = 0, mom = 0;
-                scan_num(rec.substr(q), "mm_pnl", mm);
-                scan_num(rec.substr(q), "mom_pnl", mom);
+                double mm=0,mom=0;
+                if(!scan_num(record,"mm_pnl",mm) || !scan_num(record,"mom_pnl",mom) ||
+                   mm < -9223372036854775808.0 || mm >= 9223372036854775808.0 ||
+                   mom < -9223372036854775808.0 || mom >= 9223372036854775808.0) {
+                    rep.detail="invalid seed economics"; return rep;
+                }
+                cell.hash.push_back(hash);
                 cell.mm_pnl.push_back(static_cast<i64>(mm));
                 cell.mom_pnl.push_back(static_cast<i64>(mom));
                 q += 8;
             }
+            if(cell.hash.size()!=seeds.size()) { rep.detail="cell seed count mismatch"; return rep; }
             cells.push_back(std::move(cell));
             p = cell_end;
             if (p == std::string::npos) break;
@@ -670,8 +701,16 @@ FlagshipReproReport flagship_reproduce(const std::string& artifact_path) {
     for (const RepCell& c : cells) fc.md_shares.push_back(c.md_share);
     {
         double v = 0;
-        if (scan_num(text, "horizon_ns", v)) fc.horizon_ns = static_cast<i64>(v);
-        if (scan_num(text, "warmup_ns", v)) fc.warmup_ns = static_cast<i64>(v);
+        for (const char* key : {"horizon_ns", "warmup_ns"}) {
+            if (text.find(std::string("\"") + key + "\"") == std::string::npos) continue;
+            if (!scan_num(text, key, v) || v < -9223372036854775808.0 ||
+                v >= 9223372036854775808.0) {
+                rep.detail = std::string("invalid ") + key;
+                return rep;
+            }
+            if (std::string(key) == "horizon_ns") fc.horizon_ns = static_cast<i64>(v);
+            else fc.warmup_ns = static_cast<i64>(v);
+        }
         if (scan_num(text, "economic_threshold", v))
             fc.economic_threshold_ticks_qty_per_lot = v;
         u64 u = 0;

@@ -15,11 +15,10 @@ Verified by:
 * `tests/test_world.cpp: world_deterministic_across_runs` (full pipeline,
   hash timeline equality)
 * `arbiter verify` (two separate runs compared live)
-* `arbiter demo replay`
+* reference/optimized journal replay checks
 
 The CLI distinguishes two hash domains. `simulate` prints a **world state
-hash**, covering the complete causal simulation state. `replay` and
-`timetravel` print a **book state hash**, covering the reconstructed exchange
+hash**, covering the complete causal simulation state. `replay` (including `--until`) prints a **book state hash**, covering the reconstructed exchange
 book. They serve different verification scopes and are not expected to be
 equal.
 
@@ -28,8 +27,9 @@ equal.
 1. **One logical clock.** `LogicalNs` (int64) is the only time that affects
    behavior. `std::chrono::*::now()` appears only in benchmark/statistics
    code and never in the engine.
-2. **Integers-only state.** Prices are int64 ticks, quantities uint64, money
-   is int64 in ticks*qty. There is no floating-point state anywhere.
+2. **Integer economics.** Prices are int64 ticks, quantities uint64, and
+   money int64 ticks*qty. Stochastic parameter/draw calculations use floating
+   point, so the fixed-toolchain qualification matters.
 3. **Seeded randomness.** All stochastic behavior derives from SplitMix64
    streams addressed by `(master_seed, stream_id)`, market sim, each network
    channel, each strategy. No global RNG, no time-seeded RNG.
@@ -56,9 +56,8 @@ equal.
   when compiler and platform provenance match; otherwise it compares integer
   counters exactly and floating metrics at a documented `1e-9` relative
   tolerance, failing at the first field outside tolerance.
-* **Concurrency does not touch the deterministic core.** The SPSC ring is a
-  measured experiment; the engine is single-threaded so thread scheduling
-  cannot change results.
+* **The engine is single-threaded.** Thread scheduling cannot change its
+  event ordering. The unrelated SPSC experiment was retired.
 * **Filesystem durability** follows the journal contract: `flush()` puts
   bytes in the OS page cache, `sync()` fsyncs. A machine-level power loss
   loses everything after the last sync, a process crash loses everything
