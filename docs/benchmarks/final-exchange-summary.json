@@ -1,0 +1,24 @@
+{
+  "workload_ops": 500000,
+  "allocation_probe_ops": 200000,
+  "runs_ref_opt_ops_s": [
+    [
+      9240073,
+      10337199
+    ],
+    [
+      9170021,
+      10417155
+    ],
+    [
+      9233674,
+      10344328
+    ]
+  ],
+  "median_reference_ops_s": 9233674,
+  "median_optimized_ops_s": 10344328,
+  "allocations_opt_ref": [
+    1,
+    188905
+  ]
+}

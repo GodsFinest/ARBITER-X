@@ -56,3 +56,15 @@ bad magic, sequence gaps, garbage.
 The repository does not implement a custom columnar database. Journals and
 snapshots cover deterministic execution state; research output uses explicit
 versioned JSON and CSV schemas that remain easy to inspect and reproduce.
+
+## Full-world snapshots (format 15)
+
+Full-world snapshots are distinct from book checkpoints: they retain scheduler,
+RNGs, strategy/risk/ownership state, in-flight bytes and exchange ledgers.
+Format 15 records authoritative cash net of fees and receiver-side MD duplicate
+counts. Readers, writers and restoration reject unsupported versions explicitly.
+Format 14 requires the preserved archive/monolith-65b9fa7 implementation; use that
+revision to inspect or rerun old inputs, then regenerate a format-15 snapshot.
+There is no implicit conversion. Journal/wire/book-checkpoint formats are unchanged.
+A restored world preserves execution state, not all historical measurement buffers.
+Restore into a fresh World and discard it if restoration fails.

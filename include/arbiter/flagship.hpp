@@ -22,7 +22,7 @@
 //     seed is the unit of replication: NEVER within-world events.
 //   * Statistics: for every pair of allocation cells, the PAIRED difference
 //     per seed (common random numbers across cells: same master seed,
-//     same draw streams by construction) is summarized with mean, HAC CI,
+//     shared seeded streams) is summarized with mean and IID seed-level CI,
 //     and a sign/permutation test across seeds. Multiple testing across the
 //     cell-pair family: Holm-Bonferroni. Statistical significance is
 //     reported strictly alongside economic effect size (ticks*qty per fill,
@@ -161,6 +161,7 @@ struct FlagshipResult {
     std::vector<std::string> findings;
     // environment
     std::string compiler, platform, created_utc;
+    std::string core_version, core_revision, core_source_state;
 };
 
 FlagshipResult run_flagship(const FlagshipConfig& cfg);

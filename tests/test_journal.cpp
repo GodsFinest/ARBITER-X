@@ -18,7 +18,7 @@ using namespace arbiter;
 
 namespace {
 
-const std::string kArtDir = "./build/test_artifacts";
+const std::string kArtDir = "./artifacts/journal";
 
 struct RunResult {
     u64 final_hash = 0;
@@ -433,6 +433,48 @@ AX_TEST(replay_tolerates_deterministically_rejected_gtd_entries) {
                               fills, nullptr));
         CHECK(probe.cancel(5));
         CHECK_EQ(rep.state_hash, probe.state_hash());
+    }
+}
+
+
+AX_TEST(replay_failure_status_is_preserved) {
+    std::filesystem::create_directories(kArtDir);
+    Order sell; sell.id=1; sell.account=1; sell.side=Side::Sell;
+    sell.type=OrderType::Limit; sell.tif=Tif::GTC; sell.price=100;
+    sell.qty=2; sell.leaves=2;
+    for(int scenario=0;scenario<5;++scenario) {
+        const std::string path=kArtDir+"/status_"+std::to_string(scenario)+".journal";
+        auto writer=JournalWriter::create(path,42,0); CHECK(writer); if(!writer) return;
+        CHECK(writer.value.append(ev_book_add(1,1,sell)));
+        if(scenario==0) {
+            Order buy=sell; buy.id=2; buy.account=2; buy.side=Side::Buy;
+            buy.qty=1; buy.leaves=1;
+            CHECK(writer.value.append(ev_book_add(2,2,buy)));
+            Event print; print.type=EvType::TradePrint; print.t=2;
+            print.a=2; print.b=1; print.c=1; print.p=101;
+            CHECK(writer.value.append(print));
+        } else if(scenario==2) {
+            Order replacement=sell; replacement.id=3; replacement.tif=Tif::GTD;
+            replacement.expiry=10;
+            CHECK(writer.value.append(ev_book_replace(2,2,1,replacement)));
+        } else if(scenario==3) {
+            Event checkpoint; checkpoint.type=EvType::Checkpoint; checkpoint.b=0;
+            CHECK(writer.value.append(checkpoint));
+        }
+        CHECK(writer.value.flush()); writer.value.close();
+        if(scenario==1) { auto* file=std::fopen(path.c_str(),"ab"); CHECK(file);
+            if(file){std::fputc(1,file); std::fclose(file);} }
+        if(scenario==4) { auto* file=std::fopen(path.c_str(),"r+b"); CHECK(file);
+            if(file){std::fputc('X',file);std::fclose(file);} }
+        for(auto impl : {BookImpl::Reference,BookImpl::Optimized}) {
+            const auto replay=replay_journal(path,impl);
+            CHECK(!replay.status);
+            if(scenario==0) CHECK_EQ(replay.trade_mismatches,1u);
+            if(scenario==1) CHECK_EQ(replay.status.code,Errc::JournalCorrupt);
+            if(scenario==2) CHECK_EQ(replay.status.code,Errc::ProtocolInvalid);
+            if(scenario==3) CHECK_EQ(replay.checkpoint_mismatches,1u);
+            if(scenario==4) CHECK_EQ(replay.status.code,Errc::JournalCorrupt);
+        }
     }
 }
 

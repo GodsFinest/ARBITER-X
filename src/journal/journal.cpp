@@ -1,4 +1,7 @@
 #include "arbiter/journal.hpp"
+#ifdef ARBITER_ENABLE_JOURNAL_TEST_HOOKS
+#include "journal_test_hooks.hpp"
+#endif
 #include "arbiter/codec.hpp"
 #include "arbiter/crc32.hpp"
 #include "arbiter/errors.hpp"
@@ -18,10 +21,9 @@ constexpr size_t kFileHeaderSize = 24;  // magic 4 + version 4 + seed 8 + cfg 8
 // ---------------- Writer ----------------
 
 #ifdef ARBITER_ENABLE_JOURNAL_TEST_HOOKS
-JournalWriter::FailureHook JournalWriter::failure_hook_ = nullptr;
-
-void JournalWriter::set_failure_hook_for_tests(FailureHook hook) noexcept {
-    failure_hook_ = hook;
+namespace journal_test {
+namespace { FailureHook failure_hook = nullptr; }
+void set_failure_hook_for_tests(FailureHook hook) noexcept { failure_hook = hook; }
 }
 #endif
 
@@ -63,8 +65,8 @@ JournalWriter& JournalWriter::operator=(JournalWriter&& o) noexcept {
 Status JournalWriter::append(const Event& e) {
     if (!f_) return fail(Errc::IoError, 0);
 #ifdef ARBITER_ENABLE_JOURNAL_TEST_HOOKS
-    if (failure_hook_) {
-        if (const Status injected = failure_hook_(JournalFailurePoint::Append); !injected)
+    if (journal_test::failure_hook) {
+        if (const Status injected = journal_test::failure_hook(journal_test::JournalFailurePoint::Append); !injected)
             return injected;
     }
 #endif
@@ -101,8 +103,8 @@ Status JournalWriter::flush() {
 
 Status JournalWriter::sync() {
 #ifdef ARBITER_ENABLE_JOURNAL_TEST_HOOKS
-    if (failure_hook_) {
-        if (const Status injected = failure_hook_(JournalFailurePoint::Sync); !injected)
+    if (journal_test::failure_hook) {
+        if (const Status injected = journal_test::failure_hook(journal_test::JournalFailurePoint::Sync); !injected)
             return injected;
     }
 #endif

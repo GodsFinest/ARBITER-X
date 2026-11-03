@@ -1,12 +1,12 @@
 #pragma once
 // Statistical analysis for dependent high-frequency observations.
 //
-// WARNING (see docs/RESEARCH.md): high-frequency microstructure
+// WARNING (see ARBITER-X-LAB docs/RESEARCH.md): high-frequency microstructure
 // samples are autocorrelated. IID t-tests on overlapping/tick-consecutive
 // samples OVERSTATE significance. This library therefore provides:
 //   * HAC (Newey-West) standard errors for mean estimates,
 //   * non-overlapping-subsample estimators,
-// and every report prints BOTH the naive IID interval and the robust one so
+// and callers may report both the naive IID interval and the robust one so
 // the dependence discount is visible. Multiple testing: Holm, Bonferroni,
 // and BH-FDR.
 //

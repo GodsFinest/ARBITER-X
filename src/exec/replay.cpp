@@ -122,7 +122,7 @@ ReplayResult replay_journal(const std::string& path, BookImpl impl, u64 until_se
 
     auto rd = JournalReader::open(path);
     if (!rd) {
-        rep.status = Status{Errc::NotFound, rd.status.context};
+        rep.status = rd.status;
         return rep;
     }
     JournalReader& r = rd.value;
@@ -189,7 +189,7 @@ ReplayResult replay_journal(const std::string& path, BookImpl impl, u64 until_se
                 }
             }
             if (rep.trade_mismatches > 0) {
-                if (!rep.status) rep.status = Status{Errc::Internal, rep.trade_mismatches};
+                if (rep.status) rep.status = Status{Errc::Internal, rep.trade_mismatches};
                 break;
             }
         } else if (e.type == EvType::BookCancel) {
@@ -209,11 +209,9 @@ ReplayResult replay_journal(const std::string& path, BookImpl impl, u64 until_se
     }
 
     rep.state_hash = replayer->state_hash();
-    if (rep.status || rep.trade_mismatches || rep.checkpoint_mismatches) {
-        if (!rep.status) rep.status = fail(Errc::Internal, rep.trade_mismatches + rep.checkpoint_mismatches);
-    } else {
-        rep.status = good();
-    }
+    if (r.failed() && rep.status) rep.status = r.error();
+    if (rep.status && (rep.trade_mismatches || rep.checkpoint_mismatches))
+        rep.status = fail(Errc::Internal, rep.trade_mismatches + rep.checkpoint_mismatches);
     return rep;
 }
 
